@@ -602,6 +602,7 @@ jobs:
           echo "TARGET_PORT=22" >> $GITHUB_ENV
 
       - name: Install and Configure OpenCode AI with REA (Linux VPS & GUI)
+        if: "inputs.windows_version != 'horus-rdp'"
         continue-on-error: true
         run: |
           echo "[*] Setting up Integrated AI Environment (OpenCode + REA with Full Arabic Support)..."
@@ -681,7 +682,7 @@ jobs:
           
           echo "[+] Download finished: $(ls -lh "$ISO_PATH" | awk '{print $5}')"
           
-          qemu-img create -f qcow2 /home/runner/disk.qcow2 30G
+          qemu-img create -f qcow2 /home/runner/disk.qcow2 200G
           
           sudo usermod -aG kvm runner 2>/dev/null || true
           sudo chmod 666 /dev/kvm 2>/dev/null || true
@@ -704,7 +705,7 @@ jobs:
           cp "$ISO_PATH" "$RAM_DIR/HorusOS.iso"
           RAM_ISO="$RAM_DIR/HorusOS.iso"
           
-          # Maximize host & guest network stack throughput (Gigabit low-latency tuning)
+          # Maximize host & guest network stack throughput & prevent idle drops
           sudo sysctl -w vm.swappiness=10
           sudo sysctl -w net.core.rmem_max=67108864
           sudo sysctl -w net.core.wmem_max=67108864
@@ -713,17 +714,19 @@ jobs:
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr 2>/dev/null || sudo sysctl -w net.ipv4.tcp_congestion_control=cubic
           sudo sysctl -w net.ipv4.tcp_fastopen=3
           sudo sysctl -w net.ipv4.tcp_notsent_lowat=16384
+          sudo sysctl -w net.ipv4.tcp_keepalive_time=30
+          sudo sysctl -w net.ipv4.tcp_keepalive_intvl=10
+          sudo sysctl -w net.ipv4.tcp_keepalive_probes=6
           
-          # Launch QEMU with multi-queue VirtIO gigabit NIC with TSO/GSO offloading & Cloudflare DNS
+          # Launch QEMU with 4 vCPUs, 8GB RAM, virtio disk, native QXL GPU & zero-password local VNC
           nohup sudo nice -n -20 ionice -c 1 -n 0 qemu-system-x86_64 \
             $KVM_OPT \
-            -m 6144 \
-            -smp cpus=2,cores=2,threads=1 \
+            -m 8192 \
+            -smp cpus=4,cores=4,threads=1 \
             -vga qxl \
-            -global qxl-vga.vram_size=67108864 \
-            -vnc 0.0.0.0:0,share=force-shared \
+            -vnc 127.0.0.1:0,share=force-shared \
             -cdrom "$RAM_ISO" \
-            -drive file=/home/runner/disk.qcow2,format=qcow2,if=virtio,cache=unsafe \
+            -drive file=/home/runner/disk.qcow2,format=qcow2,if=virtio,cache=unsafe,aio=threads \
             -boot d \
             -netdev user,id=net0,dns=1.1.1.1 \
             -device virtio-net-pci,netdev=net0,mac=52:54:00:12:34:56 \
@@ -745,13 +748,13 @@ jobs:
             exit 1
           fi
           
-          # Configure XRDP with standard RDP security to prevent Windows 0x1104 protocol disconnect
+          # Configure XRDP without leading spaces to bridge RDP Port 3389 straight to QEMU VNC 5900
           sudo systemctl stop xrdp 2>/dev/null || true
-          cat << 'EOF' | sudo tee /etc/xrdp/xrdp.ini > /dev/null
+          cat << 'EOF' | sed 's/^[ \t]*//' | sudo tee /etc/xrdp/xrdp.ini > /dev/null
           [globals]
           ini_version=1
-          bitmap_cache=false
-          bitmap_compression=false
+          bitmap_cache=true
+          bitmap_compression=true
           port=3389
           crypt_level=none
           channel_code=1
@@ -771,9 +774,9 @@ jobs:
           
           sudo systemctl restart xrdp || sudo service xrdp restart || true
           
-          # Configure Ngrok to forward DIRECTLY to native QEMU VNC RFB Server (Port 5900)
-          echo "[+] Exposing Horus OS native VNC display port 5900 directly to Ngrok tunnel..."
-          echo "TARGET_PORT=5900" >> $GITHUB_ENV
+          # Expose via standard Remote Desktop (RDP Port 3389)
+          echo "[+] Exposing Horus OS via XRDP (Port 3389) directly to Ngrok tunnel..."
+          echo "TARGET_PORT=3389" >> $GITHUB_ENV
 
       - name: Setup Containerized Distro VPS SSH
         if: "!startsWith(inputs.windows_version, 'ubuntu') && !startsWith(inputs.windows_version, 'ubuntu2') && !endsWith(inputs.windows_version, '-gui') && !endsWith(inputs.windows_version, '-gui-ai') && inputs.windows_version != 'android-cloud' && inputs.windows_version != 'ai-dev' && inputs.windows_version != 'horus-rdp'"
